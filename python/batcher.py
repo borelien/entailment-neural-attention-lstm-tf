@@ -6,8 +6,9 @@ class Batcher(object):
         self._premises = []
         self._hypothesis = []
         self._targets = []
-        self.word2vec = word2vec
-        self.embedding_dim = len(self.word2vec["beer"])
+        self._word2vec = word2vec
+        self._embedding_dim = len(self._word2vec["beer"])
+        self._out_of_voc_embedding = (2 * np.random.rand(self._embedding_dim) - 1) / 20
 
     def batch_generator(self, dataset, num_epochs, batch_size, sequence_length):
         ids = range(len(dataset["targets"]))
@@ -27,7 +28,7 @@ class Batcher(object):
                     self._premises = []
                     self._hypothesis = []
                     self._targets = []
-                    yield batch
+                    yield batch, epoch
 
     def preprocess(self, sequence, sequence_length):
         p_seq = copy.deepcopy(sequence)
@@ -38,12 +39,12 @@ class Batcher(object):
             p_seq = p_seq[start_index: (start_index + sequence_length)]
         for word in p_seq[:sequence_length]:
             try:
-                embedding = self.word2vec[word]
-            except:
-                embedding = (2 * np.random.rand(self.embedding_dim) - 1) / 20
+                embedding = self._word2vec[word]
+            except KeyError:
+                embedding = self._out_of_voc_embedding
             finally:
                 preprocessed.append(embedding)
 
         for i in range(sequence_length - len(p_seq)):
-            preprocessed.append(np.zeros(len(preprocessed[0])))
+            preprocessed.append(np.zeros(self._embedding_dim))
         return preprocessed

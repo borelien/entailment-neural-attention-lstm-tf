@@ -29,10 +29,10 @@ python main.py --train
 ```
 By default, the script runs on GPU 0 with these parameters values:
 ```python
-learning_rate = 0.0003
-weight_decay = 0.0001
+learning_rate = 0.001
+weight_decay = 0.
 batch_size_train = 24
-num_epochs = 10
+num_epochs = 45
 sequence_length = 20
 embedding_dim = 300
 num_units = 100

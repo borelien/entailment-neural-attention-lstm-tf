@@ -6,22 +6,25 @@ class TensorFlowTrainable(object):
         self.parameters = []
 
     def get_weights(self, dim_in, dim_out, name, trainable=True):
-        weightsInitializer = tf.constant_initializer(self.truncated_normal(shape=(dim_out, dim_in), stddev=0.01, mean=0.))
-        weights = tf.get_variable(initializer=weightsInitializer, shape=(dim_out, dim_in), trainable=True, name=name)
+        shape = (dim_out, dim_in)
+        weightsInitializer = tf.constant_initializer(self.truncated_normal(shape=shape, stddev=0.01, mean=0.))
+        weights = tf.get_variable(initializer=weightsInitializer, shape=shape, trainable=True, name=name)
         if trainable:
             self.parameters.append(weights)
         return weights
 
     def get_4Dweights(self, filter_height, filter_width, in_channels, out_channels, name, trainable=True):
-        weightsInitializer = tf.constant_initializer(self.truncated_normal(shape=(filter_height, filter_width, in_channels, out_channels), stddev=0.01, mean=0.))
-        weights = tf.get_variable(initializer=weightsInitializer, shape=(filter_height, filter_width, in_channels, out_channels), trainable=True, name=name)
+        shape = (filter_height, filter_width, in_channels, out_channels)
+        weightsInitializer = tf.constant_initializer(self.truncated_normal(shape=shape, stddev=0.01, mean=0.))
+        weights = tf.get_variable(initializer=weightsInitializer, shape=shape, trainable=True, name=name)
         if trainable:
             self.parameters.append(weights)
         return weights
 
     def get_biases(self, dim_out, name, trainable=True):
-        initialBiases = tf.constant_initializer(np.zeros((dim_out, 1)))
-        biases = tf.get_variable(initializer=initialBiases, shape=(dim_out, 1), trainable=True, name=name)
+        shape = (dim_out, 1)
+        initialBiases = tf.constant_initializer(np.zeros(shape))
+        biases = tf.get_variable(initializer=initialBiases, shape=shape, trainable=True, name=name)
         if trainable:
             self.parameters.append(biases)
         return biases
@@ -108,7 +111,7 @@ class AttentionLSTMCell(LSTMCell):
         # attention-LSTM module
         firs_term = tf.transpose(tf.nn.conv2d(input=self.Y, filter=self.w_y, strides=[1, 1, 1, 1], padding="VALID"), [0, 3, 2, 1])
         second_term = tf.expand_dims(tf.transpose(tf.tile(tf.expand_dims(tf.matmul(self.w_h, self.h[-1]) + tf.matmul(self.w_r, self.r[-1]), [2]), [1, 1, self.L]), [1, 0, 2]), 3)
-        M = firs_term + second_term
+        M = tf.tanh(firs_term + second_term)
         alpha = tf.expand_dims(tf.nn.softmax(tf.squeeze(tf.nn.conv2d(input=M, filter=self.w, strides=[1, 1, 1, 1], padding="VALID"), [1, 3])), 2)
         self.r.append(tf.transpose(tf.squeeze(tf.batch_matmul(tf.squeeze(self.Y, [3]), alpha), [2]), [1, 0]) + tf.tanh(tf.matmul(self.w_t, self.r[-1])))
 
@@ -117,14 +120,15 @@ class AttentionLSTMCell(LSTMCell):
         return tf.tanh(tf.matmul(self.w_p, self.r[-1]) + tf.tanh(tf.matmul(self.w_x, self.h[-1])))
 
 class RNN(TensorFlowTrainable):
-    def __init__(self, cell, num_units, embedding_dim, **kwargs):
+    def __init__(self, cell, num_units, embedding_dim, projecter, keep_prob, **kwargs):
         super(RNN, self).__init__()
-
+        
         # private
-        self._cell = cell(num_units=num_units, **kwargs)
-        self._num_units = num_units
+        self._projecter = projecter
         self._embedding_dim = embedding_dim
-        self._projecter = self.get_4Dweights(filter_height=1, filter_width=self._embedding_dim, in_channels=1, out_channels=self._num_units, name="projecter")
+        self._num_units = num_units
+        self._cell = cell(num_units=self._num_units, **kwargs)
+        self.keep_prob = keep_prob
 
         # public
         self.predictions = None
@@ -132,9 +136,12 @@ class RNN(TensorFlowTrainable):
         self.states = None
 
     def process(self, sequence):
-        projected_sequence = tf.expand_dims(tf.transpose(sequence, [1, 0, 2]), 3)
-        projected_sequence = tf.transpose(tf.squeeze(tf.nn.conv2d(input=projected_sequence, filter=self._projecter, strides=[1, 1, 1, 1], padding="VALID"), [2]), [1, 0, 2])
-        list_sequence = tf.unpack(projected_sequence)
+        noisy_sequence = tf.nn.dropout(x=sequence, keep_prob=self.keep_prob, name="noisy_inputs")
+        if self._projecter:
+            noisy_sequence = tf.expand_dims(tf.transpose(noisy_sequence, [1, 0, 2]), 3)
+            noisy_sequence = tf.transpose(tf.squeeze(tf.nn.conv2d(input=noisy_sequence, filter=self._projecter, strides=[1, 1, 1, 1], padding="VALID"), [2]), [1, 0, 2])
+        
+        list_sequence = tf.unpack(noisy_sequence)
         self._cell.initialize_something(input=list_sequence[0])
         for i, input in enumerate(list_sequence):
             self._cell.process(input=input)
@@ -143,20 +150,21 @@ class RNN(TensorFlowTrainable):
     def get_predictions(self):
         biases = self.get_biases(dim_out=3, name="biases")
         weights = self.get_weights(dim_in=self._num_units, dim_out=3, name="weights")
-        self.predictions = tf.transpose(tf.add(tf.matmul(weights, self._cell.features), biases), [1, 0])
+        noisy_features = tf.nn.dropout(x=self._cell.features, keep_prob=self.keep_prob, name="noisy_features")
+        self.predictions = tf.transpose(tf.add(tf.matmul(weights, noisy_features), biases), [1, 0])
         return self.predictions
     
     def loss(self, targets):
         if self.hiddens is None:
             raise Exception("You shouldn't have been there.")
         else:
-            with tf.name_scope('loss') as scope:
+            with tf.name_scope("loss") as scope:
                 loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(self.get_predictions(), targets))
                 loss_summary = tf.scalar_summary("loss", loss)
-            with tf.name_scope('accuracy') as scope:
+            with tf.name_scope("accuracy") as scope:
                 predictions = tf.to_int32(tf.argmax(self.predictions, 1))
                 correct_label = tf.to_int32(targets)
                 correct_predictions = tf.equal(predictions, correct_label)
-                accuracy = tf.reduce_mean(tf.cast(correct_predictions, 'float'))
-                accuracy_summary = tf.scalar_summary('accuracy', accuracy)
+                accuracy = tf.reduce_mean(tf.cast(correct_predictions, "float"))
+                accuracy_summary = tf.scalar_summary("accuracy", accuracy)
             return loss, loss_summary, accuracy, accuracy_summary
