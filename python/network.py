@@ -61,7 +61,7 @@ class LSTMCell(TensorFlowTrainable):
         self.c = [self.get_biases(dim_out=self._num_units, name="c", trainable=False)]
 
     def initialize_something(self, input):
-        self.batch_size_vector = tf.expand_dims(tf.unpack(tf.transpose(input, [1, 0]))[0], 0)
+        self.batch_size_vector = 1 + 0 * tf.expand_dims(tf.unpack(tf.transpose(input, [1, 0]))[0], 0)
         self.h = [self.get_biases(dim_out=self._num_units, name="h", trainable=False) * self.batch_size_vector]
 
     def process(self, input):
@@ -137,11 +137,10 @@ class RNN(TensorFlowTrainable):
 
     def process(self, sequence):
         noisy_sequence = tf.nn.dropout(x=sequence, keep_prob=self.keep_prob, name="noisy_inputs")
-        if self._projecter:
-            noisy_sequence = tf.expand_dims(tf.transpose(noisy_sequence, [1, 0, 2]), 3)
-            noisy_sequence = tf.transpose(tf.squeeze(tf.nn.conv2d(input=noisy_sequence, filter=self._projecter, strides=[1, 1, 1, 1], padding="VALID"), [2]), [1, 0, 2])
+        noisy_sequence = tf.expand_dims(tf.transpose(noisy_sequence, [1, 0, 2]), 3)
+        projected_sequence = tf.transpose(tf.squeeze(tf.nn.conv2d(input=noisy_sequence, filter=self._projecter, strides=[1, 1, 1, 1], padding="VALID"), [2]), [1, 0, 2])
         
-        list_sequence = tf.unpack(noisy_sequence)
+        list_sequence = tf.unpack(projected_sequence)
         self._cell.initialize_something(input=list_sequence[0])
         for i, input in enumerate(list_sequence):
             self._cell.process(input=input)
