@@ -64,13 +64,15 @@ class LSTMCell(TensorFlowTrainable):
         self.batch_size_vector = 1 + 0 * tf.expand_dims(tf.unpack(tf.transpose(input, [1, 0]))[0], 0)
         self.h = [self.get_biases(dim_out=self._num_units, name="h", trainable=False) * self.batch_size_vector]
 
-    def process(self, input):
+    def process(self, input, **kwargs):
         H = tf.concat(0, [tf.transpose(input, perm=[1, 0]), self.h[-1]])
         i = tf.sigmoid(x=tf.add(tf.matmul(self.w_i, H), self.b_i))
         f = tf.sigmoid(x=tf.add(tf.matmul(self.w_f, H), self.b_f))
         o = tf.sigmoid(x=tf.add(tf.matmul(self.w_o, H), self.b_o))
-        self.c.append(f * self.c[-1] + i * tf.tanh(x=tf.add(tf.matmul(self.w_c, H), self.b_c)))
-        self.h.append(o * tf.tanh(x=self.c[-1]))
+        c = f * self.c[-1] + i * tf.tanh(x=tf.add(tf.matmul(self.w_c, H), self.b_c))
+        h = o * tf.tanh(x=self.c[-1])
+        self.c.append(c)
+        self.h.append(h)
 
     @property
     def features(self):
@@ -83,8 +85,8 @@ class AttentionLSTMCell(LSTMCell):
         # warm-up
         self.warm_hiddens = hiddens
         self.L = len(self.warm_hiddens)
+        self.Y = tf.expand_dims(tf.transpose(tf.pack(self.warm_hiddens), [2, 1, 0]), 3)
         self.c = [states[-1]]
-        self.h = [hiddens[-1]]
 
         # weights
         self.w_y = self.get_4Dweights(filter_height=self._num_units, filter_width=1, in_channels=1, out_channels=self._num_units, name="w_y")
@@ -98,26 +100,28 @@ class AttentionLSTMCell(LSTMCell):
     def initialize_something(self, input):
         super(AttentionLSTMCell, self).initialize_something(input=input)
 
+        # warm-up
+        self.h = [self.warm_hiddens[-1]]
+
         # attention
         self.r = [self.get_biases(dim_out=self._num_units, name="r", trainable=False) * self.batch_size_vector]
 
-        # warming-up
-        self.Y = tf.expand_dims(tf.transpose(tf.pack(self.warm_hiddens), [2, 1, 0]), 3)
-
-    def process(self, input):
+    def process(self, input, delimiter=True):
         # classic-LSTM module
         super(AttentionLSTMCell, self).process(input=input)
 
         # attention-LSTM module
-        firs_term = tf.transpose(tf.nn.conv2d(input=self.Y, filter=self.w_y, strides=[1, 1, 1, 1], padding="VALID"), [0, 3, 2, 1])
-        second_term = tf.expand_dims(tf.transpose(tf.tile(tf.expand_dims(tf.matmul(self.w_h, self.h[-1]) + tf.matmul(self.w_r, self.r[-1]), [2]), [1, 1, self.L]), [1, 0, 2]), 3)
-        M = tf.tanh(firs_term + second_term)
-        alpha = tf.expand_dims(tf.nn.softmax(tf.squeeze(tf.nn.conv2d(input=M, filter=self.w, strides=[1, 1, 1, 1], padding="VALID"), [1, 3])), 2)
-        self.r.append(tf.transpose(tf.squeeze(tf.batch_matmul(tf.squeeze(self.Y, [3]), alpha), [2]), [1, 0]) + tf.tanh(tf.matmul(self.w_t, self.r[-1])))
+        if not delimiter:
+            first_term = tf.transpose(tf.nn.conv2d(input=self.Y, filter=self.w_y, strides=[1, 1, 1, 1], padding="VALID"), [0, 3, 2, 1])
+            second_term = tf.expand_dims(tf.transpose(tf.tile(tf.expand_dims(tf.matmul(self.w_h, self.h[-1]) + tf.matmul(self.w_r, self.r[-1]), [2]), [1, 1, self.L]), [1, 0, 2]), 3)
+            M = tf.tanh(first_term + second_term)
+            alpha = tf.expand_dims(tf.nn.softmax(tf.squeeze(tf.nn.conv2d(input=M, filter=self.w, strides=[1, 1, 1, 1], padding="VALID"), [1, 3])), 2)
+            r = tf.transpose(tf.squeeze(tf.batch_matmul(tf.squeeze(self.Y, [3]), alpha), [2]), [1, 0]) + tf.tanh(tf.matmul(self.w_t, self.r[-1]))
+            self.r.append(r)
 
     @property
     def features(self):
-        return tf.tanh(tf.matmul(self.w_p, self.r[-1]) + tf.tanh(tf.matmul(self.w_x, self.h[-1])))
+        return tf.tanh(tf.matmul(self.w_p, self.r[-1]) + tf.matmul(self.w_x, self.h[-1]))
 
 class RNN(TensorFlowTrainable):
     def __init__(self, cell, num_units, embedding_dim, projecter, keep_prob, **kwargs):
@@ -143,7 +147,7 @@ class RNN(TensorFlowTrainable):
         list_sequence = tf.unpack(projected_sequence)
         self._cell.initialize_something(input=list_sequence[0])
         for i, input in enumerate(list_sequence):
-            self._cell.process(input=input)
+            self._cell.process(input=input, delimiter=i==0)
         self.states, self.hiddens = self._cell.c[1:], self._cell.h[1:]
 
     def get_predictions(self):
