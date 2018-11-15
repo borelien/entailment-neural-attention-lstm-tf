@@ -70,7 +70,7 @@ class LSTMCell(TensorFlowTrainable):
         f = tf.sigmoid(x=tf.add(tf.matmul(self.w_f, H), self.b_f))
         o = tf.sigmoid(x=tf.add(tf.matmul(self.w_o, H), self.b_o))
         c = f * self.c[-1] + i * tf.tanh(x=tf.add(tf.matmul(self.w_c, H), self.b_c))
-        h = o * tf.tanh(x=self.c[-1])
+        h = o * tf.tanh(x=c)
         self.c.append(c)
         self.h.append(h)
 
